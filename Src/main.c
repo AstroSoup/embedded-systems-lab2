@@ -31,6 +31,8 @@
 #include "pca9538.h"
 #include "oled.h"
 #include "fonts.h"
+#include "tim.h"
+#include "buzzer.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -79,6 +81,7 @@ void draw_timer( void );
 void draw_started_timer( void );
 void update_timer_chars( uint32_t sec );
 
+
 void play_KB_beep( void );
 void play_premature_timer_end( void );
 void play_full_timer_end( void );
@@ -120,10 +123,12 @@ int main(void)
   MX_GPIO_Init();
   MX_I2C1_Init();
   MX_USART6_UART_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
   oled_Init();
   draw_timer();
   oled_UpdateScreen();
+  Buzzer_Init();
   /* USER CODE END 2 */
  
  
@@ -188,22 +193,88 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
-void play_KB_beep( void ) {
+void drawHappyFace(uint8_t x0, uint8_t y0) {
+	// left half of the face, bit 15 = leftmost column
+	static const uint16_t rows[32] = {
+		0x003F, 0x01C0, 0x0600, 0x0800, 0x1000, 0x2000, 0x2000, 0x4000,
+		0x4000, 0x8060, 0x80F0, 0x8198, 0x8000, 0x8000, 0x8000, 0x8000,
+		0x83FF, 0x83FF, 0x81FF, 0x81FF, 0x80FF, 0x807F, 0x803F, 0x401F,
+		0x400F, 0x2000, 0x2000, 0x1000, 0x0800, 0x0600, 0x01C0, 0x003F
+	};
 
+	for (uint8_t y = 0; y < 32; y++) {
+		for (uint8_t x = 0; x < 16; x++) {
+			OLED_COLOR c = (rows[y] & (0x8000 >> x)) ? White : Black;
+			oled_DrawPixel(x0 + x,      y0 + y, c);
+			oled_DrawPixel(x0 + 31 - x, y0 + y, c);
+		}
+	}
+}
+
+void drawSadFace(uint8_t x0, uint8_t y0) {
+	// left half of the face (tears, outline, eyebrows, eyes, mouth)
+	static const uint16_t rows[32] = {
+		0x0000, 0x0600, 0x0600, 0x0000, 0x6000, 0x6300, 0x0300, 0x0000,
+		0x600F, 0x6070, 0x0080, 0x0100, 0x6200, 0x62E0, 0x0470, 0x0438,
+		0x081C, 0x0800, 0x0860, 0x0860, 0x0800, 0x0807, 0x081F, 0x083F,
+		0x043F, 0x0478, 0x0270, 0x0200, 0x0100, 0x0080, 0x0070, 0x000F
+	};
+
+	for (uint8_t y = 0; y < 32; y++) {
+		for (uint8_t x = 0; x < 16; x++) {
+			OLED_COLOR c = (rows[y] & (0x8000 >> x)) ? White : Black;
+			oled_DrawPixel(x0 + x,      y0 + y, c);
+			oled_DrawPixel(x0 + 31 - x, y0 + y, c);
+		}
+	}
+}
+
+void play_KB_beep( void ) {
+	Buzzer_Set_Freq(N_C5);
+	Buzzer_Set_Volume(BUZZER_VOLUME_MAX);
+	HAL_Delay(30);
+	Buzzer_Set_Volume(BUZZER_VOLUME_MUTE);
 }
 
 void play_premature_timer_end( void ) {
-
+	uint32_t lose_melody[] = {
+		N_E5, N_DS5, N_D5, N_CS5,   // chromatic slide down
+		0,                          // short rest
+		N_C5, N_B4, N_AS4,          // sagging steps
+		N_A4,                       // slow drop
+		N_E3                        // low final note
+	};
+	uint32_t lose_delays[] = {
+		8, 8, 8, 8,
+		16,
+		8, 8, 8,
+		4,
+		2
+	};
+	Buzzer_Play(lose_melody, lose_delays, sizeof(lose_melody) / sizeof(uint32_t));
 }
 void play_full_timer_end( void ) {
-
+	uint32_t win_melody[] = {
+			N_C5, N_E5, N_G5, N_C6, N_E6, N_G6,   // rising arpeggio
+			N_E6, N_G6, 0,                        // lift and a short rest
+			N_A5, N_B5, N_C6, N_D6, N_E6, N_C6,   // answer phrase
+			N_G5, N_C6, N_E6, N_C7                // final climb, held
+		};
+		uint32_t win_delays[] = {
+			16, 16, 16, 16, 16, 16,
+			8, 4, 16,
+			16, 16, 16, 16, 8, 8,
+			16, 16, 16, 2
+		};
+	Buzzer_Play(win_melody, win_delays, sizeof(win_melody) / sizeof(uint32_t));
 }
 
 void process_pressed_key( void ) {
 	char key = lastKey;
 	lastKey = '\0';
-	play_KB_beep();
+
 	if (key != '\0') {
+		play_KB_beep();
 		if (key == 'D') {
 			if (current_digit > 0) {
 				timer[--current_digit] = '\0';
@@ -294,6 +365,10 @@ void start_timer( void ) {
 		scan_KB();
 		if ( lastKey != '\0' ) {
 			lastKey = '\0';
+			oled_Fill(Black);
+			drawSadFace(48, 16);
+			oled_UpdateScreen();
+			play_premature_timer_end();
 			return;
 		}
 
@@ -305,6 +380,10 @@ void start_timer( void ) {
 			oled_UpdateScreen();
 		}
 	}
+	oled_Fill(Black);
+	drawHappyFace(48, 16);
+	oled_UpdateScreen();
+	play_full_timer_end();
 }
 
 void draw_started_timer ( void ) {
@@ -376,56 +455,6 @@ char read_key( void ) {
 
 }
 
-
-
-void KB_Test( void ) {
-	UART_Transmit( (uint8_t*)"KB test start\n" );
-	uint8_t R = 0, C = 0, L = 0, Row[4] = {ROW4, ROW3, ROW2, ROW1}, Key, OldKey, OLED_Keys[12] = {0x30,0x30,0x30,0x30,0x30,0x30,0x30,0x30,0x30,0x30,0x30,0x30};
-	oled_Reset();
-	oled_WriteString("From bottom 1 to top", Font_7x10, White);
-	OLED_KB(OLED_Keys);
-	oled_UpdateScreen();
-	for ( int i = 0; i < 4; i++ ) {
-		while( !( R && C && L ) ) {
-			OldKey = Key;
-			Key = Check_Row( Row[i] );
-			if ( Key == 0x01 && Key != OldKey) {
-				UART_Transmit( (uint8_t*)"Right pressed\n" );
-				R = 1;
-				OLED_Keys[2+3*i] = 0x31;
-				OLED_KB(OLED_Keys);
-			} else if ( Key == 0x02 && Key != OldKey) {
-				UART_Transmit( (uint8_t*)"Center pressed\n" );
-				C = 1;
-				OLED_Keys[1+3*i] = 0x31;
-				OLED_KB(OLED_Keys);
-			} else if ( Key == 0x04 && Key != OldKey) {
-				UART_Transmit( (uint8_t*)"Left pressed\n" );
-				L = 1;
-				OLED_Keys[3*i] = 0x31;
-				OLED_KB(OLED_Keys);
-			}
-		}
-		UART_Transmit( (uint8_t*)"Row complete\n" );
-		R = C = L = 0;
-		HAL_Delay(25);
-	}
-	UART_Transmit( (uint8_t*)"KB test complete\n");
-}
-void OLED_KB( uint8_t OLED_Keys[12]) {
-	for (int i = 3; i >= 0; i--) {
-		oled_SetCursor(56, 5+(4-i)*10);
-		for (int j = 0; j < 3; j++) {
-			oled_WriteChar(OLED_Keys[j+3*i], Font_7x10, White);
-		}
-	}
-	oled_UpdateScreen();
-}
-void oled_Reset( void ) {
-	oled_Fill(Black);
-	oled_SetCursor(0, 0);
-	oled_UpdateScreen();
-}
 /* USER CODE END 4 */
 
 /**
